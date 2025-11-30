@@ -3,20 +3,37 @@ from torch import nn
 from typing import List
 import copy
 import logging
-from backbone.sema_components import Adapter, AE, Records
+from backbone.sema_components import Adapter, AE, Records, NestedLoRAAdapter
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu' 
+
+def _select_device():
+    if torch.cuda.is_available():
+        try:
+            _ = torch.cuda.device_count()
+            return 'cuda'
+        except Exception as e:
+            logging.warning(f"CUDA appears unavailable, fallback to CPU. reason={e}")
+    return 'cpu'
+
+device = _select_device()
 
 
 class AdapterModule(nn.Module):    
     def __init__(self, config, adapter_id, writer):
         super().__init__()
         self.config = config
-        self.functional = Adapter(self.config, adapter_id, dropout=0.1, bottleneck=self.config.ffn_num,
-                                init_option=self.config.ffn_adapter_init_option,
-                                adapter_scalar=self.config.ffn_adapter_scalar,
-                                adapter_layernorm_option=self.config.ffn_adapter_layernorm_option,
-                                )
+        if hasattr(config, 'ffn_adapter_type') and config.ffn_adapter_type == 'nested_lora':
+            self.functional = NestedLoRAAdapter(
+                config=config,
+                adapter_id=adapter_id,
+                dropout=0.1
+            )
+        else:
+            self.functional = Adapter(self.config, adapter_id, dropout=0.1, bottleneck=self.config.ffn_num,
+                                    init_option=self.config.ffn_adapter_init_option,
+                                    adapter_scalar=self.config.ffn_adapter_scalar,
+                                    adapter_layernorm_option=self.config.ffn_adapter_layernorm_option,
+                                    )
         layer_id = int(adapter_id.split('.')[0])
         self.not_addition_layer = layer_id < config.adapt_start_layer or layer_id > config.adapt_end_layer
         if self.not_addition_layer:
@@ -69,7 +86,7 @@ class SEMAModules(nn.Module):
         self.add_adapter(initialize=True)
         self.added_adapter = 0
 
-        self.router = nn.Linear(config.d_model, 1).cuda()
+        self.router = nn.Linear(config.d_model, 1).to(device)
         self.new_router = None
         self.detecting_outlier = False
         
@@ -78,10 +95,10 @@ class SEMAModules(nn.Module):
         return len(self.adapters)
 
     def set_new_router(self):
-        self.new_router = nn.Linear(self.config.d_model, 1).cuda()
+        self.new_router = nn.Linear(self.config.d_model, 1).to(device)
        
     def fix_router(self):
-        trained_router = nn.Linear(self.config.d_model, len(self.adapters)).cuda()
+        trained_router = nn.Linear(self.config.d_model, len(self.adapters)).to(device)
         old_router = self.router
         weight = copy.deepcopy(old_router.weight.data)
         new_weight = copy.deepcopy(self.new_router.weight.data)
@@ -149,6 +166,11 @@ class SEMAModules(nn.Module):
         return out
 
     def end_of_task_training(self):
+        if hasattr(self.config, "ffn_adapter_type") and self.config.ffn_adapter_type == "nested_lora":
+            use_consolidation = getattr(self.config, "nested_lora_use_consolidation", False)
+            alpha = getattr(self.config, "nested_lora_consolidation_alpha", 0.1)
+            if use_consolidation:
+                self.consolidate_nested_lora(alpha)
         self.freeze_functional()
         self.freeze_rd()
         self.reset_newly_added_status()
@@ -180,3 +202,16 @@ class SEMAModules(nn.Module):
                     param.requires_grad = False
                     param._grad = None
                 adapter.rd_loss_record.updating = False
+
+    def consolidate_nested_lora(self, alpha: float):
+        """
+        Merge fast -> slow weights then reset fast. Called at task boundary.
+        """
+        with torch.no_grad():
+            for adapter in self.adapters:
+                if hasattr(adapter.functional, "slow") and hasattr(adapter.functional, "fast"):
+                    for p_s, p_f in zip(adapter.functional.slow.parameters(), adapter.functional.fast.parameters()):
+                        p_s.add_(alpha * p_f)
+                    for p_f in adapter.functional.fast.parameters():
+                        p_f.zero_()
+        logging.info(f"Consolidated Nested LoRA at layer {self.layer_id} with alpha={alpha}")

@@ -85,6 +85,9 @@ def get_backbone(args, pretrained=False):
                 adapt_end_layer=args["adapt_end_layer"],
                 rd_dim=args["rd_dim"],
                 buffer_size=args["buffer_size"],
+                nested_lora_rank=args.get("nested_lora_rank", 16),
+                nested_lora_use_consolidation=args.get("nested_lora_use_consolidation", False),
+                nested_lora_consolidation_alpha=args.get("nested_lora_consolidation_alpha", 0.1),
             )
             if name == "pretrained_vit_b16_224_adapter":
                 model = vit_sema.vit_base_patch16_224_sema(num_classes=0,
@@ -949,4 +952,3 @@ class AdaptiveNet(nn.Module):
         self.fc.load_state_dict(model_infos['fc'])
         test_acc = model_infos['test_acc']
         return test_acc
-

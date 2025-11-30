@@ -53,6 +53,46 @@ class Adapter(nn.Module):
         return output
     
 
+class NestedLoRAAdapter(nn.Module):
+    """
+    Nested LoRA: fast と slow の 2 つの LoRA を並列に持つ。
+    Forward 時は両方の出力を足し合わせる。
+    """
+    def __init__(self, config, adapter_id, dropout=0.0):
+        super().__init__()
+        self.config = config
+        self.adapter_id = adapter_id
+        rank = config.nested_lora_rank
+        
+        # slow LoRA: 長期記憶用
+        self.slow = Adapter(
+            config=config,
+            adapter_id=f"{adapter_id}_slow",
+            bottleneck=rank,
+            dropout=dropout,
+            init_option="lora",
+            adapter_scalar="1.0",
+            adapter_layernorm_option="none"
+        )
+        
+        # fast LoRA: 短期記憶用
+        self.fast = Adapter(
+            config=config,
+            adapter_id=f"{adapter_id}_fast",
+            bottleneck=rank,
+            dropout=dropout,
+            init_option="lora",
+            adapter_scalar="1.0",
+            adapter_layernorm_option="none"
+        )
+    
+    def forward(self, x):
+        # 両方の LoRA 出力を足し合わせる
+        slow_out = self.slow(x)
+        fast_out = self.fast(x)
+        return slow_out + fast_out
+
+
 class AE(nn.Module):
 	def __init__(self, config):
 		super(AE, self).__init__()

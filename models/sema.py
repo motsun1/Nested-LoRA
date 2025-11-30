@@ -82,9 +82,13 @@ class Learner(BaseLearner):
                 self.update_optimizer_and_scheduler(num_epoch=self.args['func_epoch'], lr=self.init_lr)
                 self._init_train(self.args['func_epoch'], train_loader, test_loader, self.optimizer, self.scheduler, phase='func')
             
+        if "ffn_adapter_type" in self.args and self.args["ffn_adapter_type"] == "nested_lora":
+            self._log_nested_lora_norms(tag=f"task{self._cur_task}_pre_consolidation")
         for module in self._network.backbone.modules():
             if isinstance(module, SEMAModules):
                 module.end_of_task_training()
+        if "ffn_adapter_type" in self.args and self.args["ffn_adapter_type"] == "nested_lora":
+            self._log_nested_lora_norms(tag=f"task{self._cur_task}_post_consolidation")
 
     def _train_new(self, train_loader, test_loader):
         self.update_optimizer_and_scheduler(num_epoch=self.args['func_epoch'], lr=self.init_lr)
@@ -122,11 +126,13 @@ class Learner(BaseLearner):
 
     def _init_train(self, total_epoch, train_loader, test_loader, optimizer, scheduler, phase='func'):
         prog_bar = tqdm(range(total_epoch))
+        global_step = 0
         for _, epoch in enumerate(prog_bar):
             self._network.train()
             losses = 0.0
             correct, total = 0, 0
             for i, (_, inputs, targets) in enumerate(train_loader):
+                global_step += 1
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 outcome = self._network(inputs)
 
@@ -143,6 +149,15 @@ class Learner(BaseLearner):
 
                 optimizer.zero_grad()
                 loss.backward()
+
+                # Nested LoRA: control slow update frequency
+                if 'ffn_adapter_type' in self.args and self.args['ffn_adapter_type'] == 'nested_lora':
+                    update_interval = self.args.get('nested_lora_update_interval_slow', 1)
+                    if update_interval > 1 and global_step % update_interval != 0:
+                        for n, p in self._network.named_parameters():
+                            if 'functional.slow' in n and p.grad is not None:
+                                p.grad.zero_()
+
                 optimizer.step()
                 losses += loss.item()
 
@@ -201,14 +216,60 @@ class Learner(BaseLearner):
 
         return np.around(tensor2numpy(correct) * 100 / total, decimals=2)
 
+    def _log_nested_lora_norms(self, tag: str):
+        """
+        Log total L2 norms of fast/slow parameters for monitoring.
+        """
+        fast_norm, slow_norm = 0.0, 0.0
+        for name, param in self._network.named_parameters():
+            if not param.requires_grad:
+                continue
+            if "functional.fast" in name:
+                fast_norm += torch.norm(param.detach()).item() ** 2
+            elif "functional.slow" in name:
+                slow_norm += torch.norm(param.detach()).item() ** 2
+        fast_norm = math.sqrt(fast_norm)
+        slow_norm = math.sqrt(slow_norm)
+        logging.info(f"[NestedLoRA][{tag}] fast_norm={fast_norm:.4f}, slow_norm={slow_norm:.4f}")
+
 
     def update_optimizer_and_scheduler(self, num_epoch=20, lr=None):
         lr = self.args["init_lr"] if lr is None else lr
-        func_params = [p for n,p in self._network.named_parameters() if ('functional' in n or 'router' in n or 'fc' in n) and p.requires_grad]
-        if self.args['optimizer']=='sgd':
-            self.optimizer = optim.SGD(func_params, momentum=0.9, lr=lr,weight_decay=self.args["weight_decay"])
-        elif self.args['optimizer']=='adam':
-            self.optimizer = optim.AdamW(func_params, lr=lr, weight_decay=self.args["weight_decay"])
+        
+        if 'ffn_adapter_type' in self.args and self.args['ffn_adapter_type'] == 'nested_lora':
+            slow_params = []
+            fast_params = []
+            other_params = []
+            
+            for n, p in self._network.named_parameters():
+                if not p.requires_grad:
+                    continue
+                
+                if 'functional.slow' in n:
+                    slow_params.append(p)
+                elif 'functional.fast' in n:
+                    fast_params.append(p)
+                elif 'functional' in n or 'router' in n or 'fc' in n:
+                    other_params.append(p)
+            
+            param_groups = [
+                {'params': slow_params, 'lr': self.args.get('nested_lora_lr_slow', 0.001)},
+                {'params': fast_params, 'lr': self.args.get('nested_lora_lr_fast', 0.01)},
+                {'params': other_params, 'lr': lr}
+            ]
+            
+            if self.args['optimizer'] == 'sgd':
+                self.optimizer = optim.SGD(param_groups, momentum=0.9, weight_decay=self.args["weight_decay"])
+            elif self.args['optimizer'] == 'adam':
+                self.optimizer = optim.AdamW(param_groups, weight_decay=self.args["weight_decay"])
+            logging.info(f"[NestedLoRA] optimizer groups => slow: lr={param_groups[0]['lr']}, params={len(slow_params)}; fast: lr={param_groups[1]['lr']}, params={len(fast_params)}; other: lr={lr}, params={len(other_params)}")
+        else:
+            func_params = [p for n,p in self._network.named_parameters() if ('functional' in n or 'router' in n or 'fc' in n) and p.requires_grad]
+            if self.args['optimizer']=='sgd':
+                self.optimizer = optim.SGD(func_params, momentum=0.9, lr=lr,weight_decay=self.args["weight_decay"])
+            elif self.args['optimizer']=='adam':
+                self.optimizer = optim.AdamW(func_params, lr=lr, weight_decay=self.args["weight_decay"])
+            logging.info(f"[SEMA] optimizer params={len(func_params)}, lr={lr}")
 
         min_lr = self.args['min_lr'] if self.args['min_lr'] is not None else 1e-8
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=num_epoch, eta_min=min_lr)    
