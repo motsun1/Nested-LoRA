@@ -165,11 +165,11 @@ class SEMAModules(nn.Module):
         out = {"func_out": func_out, "rd_loss": rd_loss, "added": added}
         return out
 
-    def end_of_task_training(self):
+    def end_of_task_training(self, do_consolidate=True):
         if hasattr(self.config, "ffn_adapter_type") and self.config.ffn_adapter_type == "nested_lora":
             use_consolidation = getattr(self.config, "nested_lora_use_consolidation", False)
             alpha = getattr(self.config, "nested_lora_consolidation_alpha", 0.1)
-            if use_consolidation:
+            if use_consolidation and do_consolidate:
                 self.consolidate_nested_lora(alpha)
         self.freeze_functional()
         self.freeze_rd()

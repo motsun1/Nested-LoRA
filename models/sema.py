@@ -84,9 +84,19 @@ class Learner(BaseLearner):
             
         if "ffn_adapter_type" in self.args and self.args["ffn_adapter_type"] == "nested_lora":
             self._log_nested_lora_norms(tag=f"task{self._cur_task}_pre_consolidation")
+        # Nested LoRA: check consolidation interval
+        consolidation_interval = self.args.get("nested_lora_consolidation_interval", 1)
+        # task index is 0-based, so task 0 is the first task.
+        # If interval=1, we consolidate every task (0+1)%1==0, (1+1)%1==0...
+        # If interval=5, we consolidate at task 4, 9, ... ((4+1)%5==0)
+        do_consolidate = ((self._cur_task + 1) % consolidation_interval == 0)
+        
+        if "ffn_adapter_type" in self.args and self.args["ffn_adapter_type"] == "nested_lora":
+             logging.info(f"[NestedLoRA] Task {self._cur_task} finished. Consolidation interval={consolidation_interval}. Do consolidate? {do_consolidate}")
+
         for module in self._network.backbone.modules():
             if isinstance(module, SEMAModules):
-                module.end_of_task_training()
+                module.end_of_task_training(do_consolidate=do_consolidate)
         if "ffn_adapter_type" in self.args and self.args["ffn_adapter_type"] == "nested_lora":
             self._log_nested_lora_norms(tag=f"task{self._cur_task}_post_consolidation")
 
