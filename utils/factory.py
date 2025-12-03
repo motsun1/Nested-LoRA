@@ -30,6 +30,8 @@ def get_model(model_name, args):
         from models.memo import Learner
     elif name == "sema":
         from models.sema import Learner
+    elif name == "nested_lora":
+        from models.nested_lora import Learner
     else:
         assert 0
     return Learner(args)

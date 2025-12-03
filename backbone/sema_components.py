@@ -87,9 +87,17 @@ class NestedLoRAAdapter(nn.Module):
         )
     
     def forward(self, x):
-        # 両方の LoRA 出力を足し合わせる
         slow_out = self.slow(x)
         fast_out = self.fast(x)
+
+        # Inference ablation: optionally zero one branch
+        mode = getattr(self.config, "nested_lora_eval_ablation", "none")
+        if not self.training:
+            if mode == "fast_only":
+                slow_out = torch.zeros_like(slow_out)
+            elif mode == "slow_only":
+                fast_out = torch.zeros_like(fast_out)
+
         return slow_out + fast_out
 
 

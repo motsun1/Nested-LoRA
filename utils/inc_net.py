@@ -62,6 +62,36 @@ def get_backbone(args, pretrained=False):
         else:
             raise NotImplementedError("Inconsistent model name and model type")
 
+    elif '_nested_lora' in name:
+        if args["model_name"] == "nested_lora":
+            from backbone import vit_nested_lora
+            from easydict import EasyDict
+            tuning_config = EasyDict(
+                ffn_adapt=True,
+                ffn_option="parallel",
+                ffn_adapter_layernorm_option="none",
+                ffn_adapter_init_option="lora",
+                ffn_adapter_scalar="0.1",
+                ffn_num=args["ffn_num"],
+                ffn_adapter_type="nested_lora",
+                d_model=768,
+                adapt_start_layer=args["adapt_start_layer"],
+                adapt_end_layer=args["adapt_end_layer"],
+                nested_lora_rank=args.get("nested_lora_rank", 16),
+                nested_lora_use_consolidation=args.get("nested_lora_use_consolidation", False),
+                nested_lora_consolidation_alpha=args.get("nested_lora_consolidation_alpha", 0.1),
+                nested_lora_eval_ablation=args.get("nested_lora_eval_ablation", "none"),
+            )
+            if name == "pretrained_vit_b16_224_nested_lora":
+                model = vit_nested_lora.vit_base_patch16_224_nested_lora(num_classes=0,
+                    global_pool=False, drop_path_rate=0.0, tuning_config=tuning_config)
+                model.out_dim=768
+            else:
+                raise NotImplementedError("Unknown type {}".format(name))
+            return model.eval()
+        else:
+            raise NotImplementedError("Inconsistent model name and model type")
+
     elif '_adapter' in name:
         ffn_num = args["ffn_num"]
         if args["model_name"] == "sema":
@@ -95,6 +125,32 @@ def get_backbone(args, pretrained=False):
                 model.out_dim=768
             elif name == "pretrained_vit_b16_224_in21k_adapter":
                 model = vit_sema.vit_base_patch16_224_in21k_sema(num_classes=0,
+                    global_pool=False, drop_path_rate=0.0, tuning_config=tuning_config)
+                model.out_dim=768
+            else:
+                raise NotImplementedError("Unknown type {}".format(name))
+            return model.eval()
+        elif args["model_name"] == "nested_lora":
+            from backbone import vit_nested_lora
+            from easydict import EasyDict
+            tuning_config = EasyDict(
+                ffn_adapt=True,
+                ffn_option="parallel",
+                ffn_adapter_layernorm_option="none",
+                ffn_adapter_init_option="lora",
+                ffn_adapter_scalar="0.1",
+                ffn_num=ffn_num,
+                ffn_adapter_type="nested_lora",
+                d_model=768,
+                adapt_start_layer=args["adapt_start_layer"],
+                adapt_end_layer=args["adapt_end_layer"],
+                nested_lora_rank=args.get("nested_lora_rank", 16),
+                nested_lora_use_consolidation=args.get("nested_lora_use_consolidation", False),
+                nested_lora_consolidation_alpha=args.get("nested_lora_consolidation_alpha", 0.1),
+                nested_lora_eval_ablation=args.get("nested_lora_eval_ablation", "none"),
+            )
+            if name == "pretrained_vit_b16_224_nested_lora":
+                model = vit_nested_lora.vit_base_patch16_224_nested_lora(num_classes=0,
                     global_pool=False, drop_path_rate=0.0, tuning_config=tuning_config)
                 model.out_dim=768
             else:
@@ -558,6 +614,21 @@ class SEMAVitNet(BaseNet):
 
     def extract_vector(self, x):
         return self.backbone(x)
+
+    def forward(self, x):
+        out = self.backbone(x)
+        x = out["features"]
+        out.update({"logits": self.fc(x)})
+        return out
+
+class NestedLoRAVitNet(BaseNet):
+    def __init__(self, args, pretrained):
+        super().__init__(args, pretrained)
+        self.fc = None
+        self.args = args
+
+    def extract_vector(self, x):
+        return self.backbone(x)["features"]
 
     def forward(self, x):
         out = self.backbone(x)

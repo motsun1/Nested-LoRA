@@ -8,12 +8,15 @@ from utils import factory
 from utils.data_manager import DataManager
 from utils.toolkit import count_parameters
 import os
-import re
 import numpy as np
 
 def eval(args):
     args["seed"]=args["seed"][0]
     device = copy.deepcopy(args["device"])
+
+    checkpt_path = args.get("checkpt_path", None)
+    if checkpt_path is None:
+        raise ValueError("`checkpt_path` is required for eval runs. Add it to the config or pass --checkpt_path on the CLI.")
 
     logs_name = "logs/{}/{}".format(args["model_name"],args["backbone_type"])
     logfilename = "logs/{}/{}/eval_{}".format(
@@ -56,30 +59,25 @@ def eval(args):
     model._total_classes = data_manager.nb_classes
     test_dataset = data_manager.get_dataset(np.arange(0, model._total_classes), source="test", mode="test" )
     model.test_loader = DataLoader(test_dataset, batch_size=args["batch_size"], shuffle=False, num_workers=8)
-    adapter_pattern = get_adapter_pattern(args["checkpt_path"])
-    for idx, n in enumerate(adapter_pattern):
-        if n > 1:
-            for i in range(n-1):
-                model._network.backbone.blocks[idx].adapter_module.add_adapter()
-                model._network.backbone.blocks[idx].adapter_module.end_of_task_training()
-    model.load_checkpoint(args["checkpt_path"])
-    model._network.to(args["device"][0])
+    load_checkpoint(model, checkpt_path, args["device"][0])
+
     cnn_accy, _ = model.eval_task()
     logging.info("CNN: {}".format(cnn_accy["grouped"]))
     
 
-def get_adapter_pattern(checkpt_path):
-    state_dict = torch.load(checkpt_path)
-    adapter_pattern = [1]*12
-    pattern = re.compile(r'backbone\.blocks\.(\d+)\.adapter_module\.adapters\.(\d+)\.')
+def load_checkpoint(model, checkpt_path, device):
+    state = torch.load(checkpt_path, map_location=device)
 
-    for key in state_dict.keys():
-        match = pattern.search(key)
-        if match:
-            block_id = int(match.group(1))
-            adapter_id = int(match.group(2))
-            adapter_pattern[block_id] = max(adapter_pattern[block_id], adapter_id+1)
-    return adapter_pattern
+    if isinstance(state, dict) and "model_state_dict" in state:
+        load_info = model._network.load_state_dict(state["model_state_dict"], strict=False)
+        logging.info(f"Loaded checkpoint with missing_keys={load_info.missing_keys}, unexpected_keys={load_info.unexpected_keys}")
+    elif isinstance(state, dict):
+        load_info = model._network.load_state_dict(state, strict=False)
+        logging.info(f"Loaded checkpoint (raw state_dict) with missing_keys={load_info.missing_keys}, unexpected_keys={load_info.unexpected_keys}")
+    else:
+        raise ValueError(f"Unsupported checkpoint format from {checkpt_path}")
+
+    model._network.to(device)
 
 
     

@@ -41,7 +41,7 @@ env/
 
 # Experiment Results
 results/
-logs/
+# logs/
 checkpoints/
 *.pth
 *.pkl

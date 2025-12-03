@@ -27,6 +27,8 @@ def setup_parser():
     parser.add_argument('--config', type=str, default='./exps/sema_inr_10task.json',
                         help='Json file of settings.')
     parser.add_argument('--eval', type=bool, default=False)
+    parser.add_argument('--checkpt_path', type=str, default=None,
+                        help='Path to model checkpoint for eval-only runs.')
     return parser
 
 if __name__ == '__main__':
