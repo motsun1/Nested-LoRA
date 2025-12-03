@@ -64,7 +64,7 @@ class NestedLoRAAdapter(nn.Module):
         self.adapter_id = adapter_id
         rank = config.nested_lora_rank
         
-        # slow LoRA: 長期記憶用
+        # slow LoRA: 長期共通メモリ
         self.slow = Adapter(
             config=config,
             adapter_id=f"{adapter_id}_slow",
@@ -75,21 +75,49 @@ class NestedLoRAAdapter(nn.Module):
             adapter_layernorm_option="none"
         )
         
-        # fast LoRA: 短期記憶用
-        self.fast = Adapter(
-            config=config,
-            adapter_id=f"{adapter_id}_fast",
-            bottleneck=rank,
-            dropout=dropout,
-            init_option="lora",
-            adapter_scalar="1.0",
-            adapter_layernorm_option="none"
-        )
+        # fast LoRA: 短期エピソード記憶 (MoE-like)
+        # K = nb_tasks (config.nb_tasks)
+        self.nb_tasks = getattr(config, "nb_tasks", 1)
+        self.fast_adapters = nn.ModuleList([
+            Adapter(
+                config=config,
+                adapter_id=f"{adapter_id}_fast_{i}",
+                bottleneck=rank,
+                dropout=dropout,
+                init_option="lora",
+                adapter_scalar="1.0",
+                adapter_layernorm_option="none"
+            ) for i in range(self.nb_tasks)
+        ])
     
-    def forward(self, x):
+    def forward(self, x, task_id=None):
         slow_out = self.slow(x)
-        fast_out = self.fast(x)
-
+        
+        if self.training:
+            # Training: use specific fast adapter for the current task
+            if task_id is None:
+                # Fallback if task_id not provided (should not happen in correct usage)
+                # Default to 0 or raise error? Let's default to 0 for safety but log warning if needed.
+                fast_out = self.fast_adapters[0](x)
+            else:
+                # Ensure task_id is within bounds
+                idx = task_id % self.nb_tasks
+                fast_out = self.fast_adapters[idx](x)
+        else:
+            # Inference: slow + sum(fast_k) (or average)
+            # v0 design: sum all fast adapters
+            fast_out = 0
+            for adapter in self.fast_adapters:
+                fast_out = fast_out + adapter(x)
+            # Optionally average? The plan said "sum or average". 
+            # If we sum, the scale might be large. But let's stick to sum as per "ΔW = slow + Σ fast_k" roughly.
+            # Wait, if we sum K adapters, the output magnitude might be K times larger.
+            # However, usually only one fast adapter is active during training.
+            # If we sum them, we might need to scale. 
+            # But let's follow the plan: "ΔW = slow + (平均 or 和) fast_k"
+            # Let's use SUM for now, as averaging might dilute the signal if K is large and most are zero.
+            # Actually, if most are zero-initialized or small, sum is fine.
+            
         # Inference ablation: optionally zero one branch
         mode = getattr(self.config, "nested_lora_eval_ablation", "none")
         if not self.training:

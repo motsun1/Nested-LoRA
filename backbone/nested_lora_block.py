@@ -28,8 +28,8 @@ class AdapterModule(nn.Module):
         )
         self.adapter_id = adapter_id
 
-    def forward(self, x):
-        func_out = self.functional(x)
+    def forward(self, x, task_id=None):
+        func_out = self.functional(x, task_id=task_id)
         return func_out
 
 class NestedLoRAModules(nn.Module):
@@ -50,34 +50,53 @@ class NestedLoRAModules(nn.Module):
         adapter_id = f"{self.layer_id}.0"
         return AdapterModule(self.config, adapter_id).to(device)
 
-    def forward(self, x):
+    def forward(self, x, task_id=None):
         # Check if we should apply adapter at this layer
         if self.layer_id < self.adapt_start_layer or self.layer_id > self.adapt_end_layer:
             # No adapter for this layer
             return {"func_out": torch.zeros_like(x).to(device)}
         
         # Apply the single shared adapter
-        func_out = self.adapter(x)
+        func_out = self.adapter(x, task_id=task_id)
         return {"func_out": func_out}
 
-    def end_of_task_training(self, do_consolidate=True):
+    def end_of_task_training(self, do_consolidate=True, task_id=None):
         """
-        Perform consolidation: slow += alpha * fast; fast = 0
+        Perform consolidation: slow += alpha * fast_k; fast_k = 0
         """
         use_consolidation = getattr(self.config, "nested_lora_use_consolidation", False)
         alpha = getattr(self.config, "nested_lora_consolidation_alpha", 0.1)
         
         if use_consolidation and do_consolidate:
-            self.consolidate_nested_lora(alpha)
+            self.consolidate_nested_lora(alpha, task_id=task_id)
             
-    def consolidate_nested_lora(self, alpha: float):
+    def consolidate_nested_lora(self, alpha: float, task_id=None):
         with torch.no_grad():
             adapter = self.adapter
-            if hasattr(adapter.functional, "slow") and hasattr(adapter.functional, "fast"):
+            
+            # Determine which fast adapter to consolidate
+            if hasattr(adapter.functional, "slow") and hasattr(adapter.functional, "fast_adapters"):
+                if task_id is None:
+                    # Default to 0 if not specified (should be specified)
+                    logging.warning("Consolidating Nested LoRA but task_id is None. Defaulting to fast_adapters[0].")
+                    fast_adapter = adapter.functional.fast_adapters[0]
+                else:
+                    nb_tasks = len(adapter.functional.fast_adapters)
+                    idx = task_id % nb_tasks
+                    fast_adapter = adapter.functional.fast_adapters[idx]
+                
                 # slow += alpha * fast
-                for p_s, p_f in zip(adapter.functional.slow.parameters(), adapter.functional.fast.parameters()):
+                for p_s, p_f in zip(adapter.functional.slow.parameters(), fast_adapter.parameters()):
                     p_s.add_(alpha * p_f)
                 # fast = 0
+                for p_f in fast_adapter.parameters():
+                    p_f.zero_()
+                    
+                logging.info(f"Consolidated Nested LoRA at layer {self.layer_id} (fast_{idx} -> slow) with alpha={alpha}")
+            elif hasattr(adapter.functional, "slow") and hasattr(adapter.functional, "fast"):
+                 # Legacy support for single fast adapter
+                for p_s, p_f in zip(adapter.functional.slow.parameters(), adapter.functional.fast.parameters()):
+                    p_s.add_(alpha * p_f)
                 for p_f in adapter.functional.fast.parameters():
                     p_f.zero_()
-        logging.info(f"Consolidated Nested LoRA at layer {self.layer_id} with alpha={alpha}")
+                logging.info(f"Consolidated Nested LoRA at layer {self.layer_id} (single fast -> slow) with alpha={alpha}")

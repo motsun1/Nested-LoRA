@@ -630,8 +630,8 @@ class NestedLoRAVitNet(BaseNet):
     def extract_vector(self, x):
         return self.backbone(x)["features"]
 
-    def forward(self, x):
-        out = self.backbone(x)
+    def forward(self, x, task_id=None):
+        out = self.backbone(x, task_id=task_id)
         x = out["features"]
         out.update({"logits": self.fc(x)})
         return out

@@ -71,13 +71,13 @@ class Block(nn.Module):
             self.adapter_module = NestedLoRAModules(self.config, layer_id=layer_id)
         self.layer_id = layer_id
 
-    def forward(self, x):
+    def forward(self, x, task_id=None):
         x = x + self.drop_path(self.attn(self.norm1(x)))
         
         # Adapter logic
         adapt_x = None
         if self.config.ffn_adapt:
-             out = self.adapter_module(x)
+             out = self.adapter_module(x, task_id=task_id)
              adapt_x = out["func_out"]
 
         residual = x
@@ -168,7 +168,7 @@ class VisionTransformer(nn.Module):
         if self.num_tokens == 2:
             self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if num_classes > 0 else nn.Identity()
 
-    def forward_features(self, x):
+    def forward_features(self, x, task_id=None):
         B = x.shape[0]
         x = self.patch_embed(x)
 
@@ -178,7 +178,7 @@ class VisionTransformer(nn.Module):
         x = self.pos_drop(x)
 
         for blk in self.blocks:
-            x = blk(x)
+            x = blk(x, task_id=task_id)
 
         if self.global_pool:
             x = x[:, 1:, :].mean(dim=1)
@@ -189,8 +189,8 @@ class VisionTransformer(nn.Module):
 
         return outcome
 
-    def forward(self, x):
-        x = self.forward_features(x)
+    def forward(self, x, task_id=None):
+        x = self.forward_features(x, task_id=task_id)
         if self.head_dist is not None:
             x, x_dist = self.head(x[0]), self.head_dist(x[1])
             if self.training and not torch.jit.is_scripting():

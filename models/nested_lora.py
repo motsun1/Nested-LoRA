@@ -99,7 +99,7 @@ class Learner(BaseLearner):
 
         for module in self._network.backbone.modules():
             if isinstance(module, NestedLoRAModules):
-                module.end_of_task_training(do_consolidate=do_consolidate)
+                module.end_of_task_training(do_consolidate=do_consolidate, task_id=self._cur_task)
                 
         self._log_nested_lora_norms(tag=f"task{self._cur_task}_post_consolidation")
 
@@ -115,7 +115,7 @@ class Learner(BaseLearner):
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 
                 # Forward
-                outcome = self._network(inputs)
+                outcome = self._network(inputs, task_id=self._cur_task)
                 logits = outcome["logits"]
                 logits = logits[:, :self._total_classes]
                 
@@ -174,6 +174,8 @@ class Learner(BaseLearner):
                 slow_params.append(p)
             elif 'functional.fast' in n:
                 fast_params.append(p)
+            elif 'functional.fast_adapters' in n:
+                fast_params.append(p)
             else:
                 other_params.append(p)
         
@@ -206,6 +208,9 @@ class Learner(BaseLearner):
                 fast_norm += torch.norm(param.detach()).item() ** 2
             elif "functional.slow" in name:
                 slow_norm += torch.norm(param.detach()).item() ** 2
+            elif "functional.fast_adapters" in name:
+                # Sum norms of all fast adapters
+                fast_norm += torch.norm(param.detach()).item() ** 2
         fast_norm = math.sqrt(fast_norm)
         slow_norm = math.sqrt(slow_norm)
         logging.info(f"[NestedLoRA][{tag}] fast_norm={fast_norm:.4f}, slow_norm={slow_norm:.4f}")
