@@ -119,9 +119,9 @@ class Learner(BaseLearner):
                 logits = outcome["logits"]
                 logits = logits[:, :self._total_classes]
                 
-                # Masking old classes if needed (optional, depending on strategy. Here standard CE)
-                # if self._cur_task > 0:
-                #     logits[:, :self._known_classes] = -float('inf')
+                # Masking old classes to prevent forgetting in fc layer (no replay setting)
+                if self._cur_task > 0:
+                    logits[:, :self._known_classes] = -float('inf')
 
                 loss = F.cross_entropy(logits, targets)
 

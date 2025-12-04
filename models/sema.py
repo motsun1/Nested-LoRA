@@ -13,7 +13,7 @@ from models.base import BaseLearner
 from utils.toolkit import tensor2numpy
 from backbone.sema_block import SEMAModules
 
-num_workers = 8
+# num_workers = 8 # Removed hardcoded value
 
 class Learner(BaseLearner):
     def __init__(self, args):
@@ -41,13 +41,13 @@ class Learner(BaseLearner):
         train_dataset = data_manager.get_dataset(np.arange(self._known_classes, self._total_classes),source="train", mode="train", )
         self.train_dataset=train_dataset
         self.data_manager=data_manager
-        self.train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=num_workers)
+        self.train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.args.get("num_workers", 4))
 
         test_dataset = data_manager.get_dataset(np.arange(0, self._total_classes), source="test", mode="test" )
-        self.test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=num_workers)
+        self.test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.args.get("num_workers", 4))
 
         train_dataset_for_protonet=data_manager.get_dataset(np.arange(self._known_classes, self._total_classes),source="train", mode="test", )
-        self.train_loader_for_protonet = DataLoader(train_dataset_for_protonet, batch_size=self.batch_size, shuffle=True, num_workers=num_workers)
+        self.train_loader_for_protonet = DataLoader(train_dataset_for_protonet, batch_size=self.batch_size, shuffle=True, num_workers=self.args.get("num_workers", 4))
 
         if len(self._multiple_gpus) > 1:
             print('Multiple GPUs')
@@ -72,7 +72,7 @@ class Learner(BaseLearner):
             for module in self._network.backbone.modules():
                 if isinstance(module, SEMAModules):
                     module.detecting_outlier = True
-            detect_loader = DataLoader(train_loader.dataset, batch_size=self.args["detect_batch_size"], shuffle=True, num_workers=num_workers)     
+            detect_loader = DataLoader(train_loader.dataset, batch_size=self.args["detect_batch_size"], shuffle=True, num_workers=self.args.get("num_workers", 4))     
             added = self._detect_outlier(detect_loader, train_loader, test_loader, 0)
 
             for module in self._network.backbone.modules():

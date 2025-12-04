@@ -207,11 +207,42 @@ class SEMAModules(nn.Module):
         """
         Merge fast -> slow weights then reset fast. Called at task boundary.
         """
+        method = getattr(self.config, "nested_lora_consolidation_method", "task_arithmetic")
+        
         with torch.no_grad():
             for adapter in self.adapters:
-                if hasattr(adapter.functional, "slow") and hasattr(adapter.functional, "fast"):
-                    for p_s, p_f in zip(adapter.functional.slow.parameters(), adapter.functional.fast.parameters()):
-                        p_s.add_(alpha * p_f)
-                    for p_f in adapter.functional.fast.parameters():
-                        p_f.zero_()
-        logging.info(f"Consolidated Nested LoRA at layer {self.layer_id} with alpha={alpha}")
+                # Identify fast adapters
+                fast_adapters = []
+                if hasattr(adapter.functional, "fast_adapters"):
+                    fast_adapters = adapter.functional.fast_adapters
+                elif hasattr(adapter.functional, "fast"):
+                    fast_adapters = [adapter.functional.fast]
+                
+                if hasattr(adapter.functional, "slow") and len(fast_adapters) > 0:
+                    for fast_adapter in fast_adapters:
+                        for p_s, p_f in zip(adapter.functional.slow.parameters(), fast_adapter.parameters()):
+                            if method == "pam":
+                                # PAM-lite: Only merge if signs match (or one is zero? No, PAM says align. 
+                                # Here we implement "suppress conflicting updates" as per plan)
+                                # mask = 1 if p_s * p_f > 0 else 0
+                                # But wait, if p_s is 0 (init), we should probably allow update?
+                                # If p_s is 0, p_s * p_f is 0. 
+                                # If we want to populate slow initially, we should allow it.
+                                # But PAM is about alignment.
+                                # "fast のその要素を正しい方向に re-align（再初期化 or 抑制）"
+                                # If slow is 0, any direction is fine?
+                                # Let's assume if p_s is 0, we allow it.
+                                # So condition: p_s * p_f >= 0 ?
+                                # Or simply: mask = (p_s * p_f >= 0).float()
+                                mask = (p_s * p_f >= 0).float()
+                                p_f_aligned = p_f * mask
+                                p_s.add_(alpha * p_f_aligned)
+                            else:
+                                # Default Task Arithmetic
+                                p_s.add_(alpha * p_f)
+                        
+                        # Reset fast
+                        for p_f in fast_adapter.parameters():
+                            p_f.zero_()
+                            
+        logging.info(f"Consolidated Nested LoRA at layer {self.layer_id} with alpha={alpha}, method={method}")
