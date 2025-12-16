@@ -1,0 +1,48 @@
+\relax 
+\citation{dosovitskiy2021an}
+\citation{wang2024comprehensive,parisi2019continual}
+\citation{rebuffi2017icarl,mundt2023wholistic}
+\citation{french1999catastrophic,kirkpatrick2017overcoming}
+\citation{mermillod2013stability}
+\citation{houlsby2019parameter}
+\citation{hu2022lora}
+\citation{yu2024boosting,wang2025self}
+\citation{mcclelland1995there,kumaran2016learning}
+\citation{behrouz2025nested,wang2025self}
+\citation{krizhevsky2009learning}
+\newlabel{introduction}{{1.}{1}{}{section.1}{}}
+\citation{behrouz2025nested}
+\citation{hu2022lora}
+\citation{sokar2025continual}
+\@writefile{}{\contentsline {figure}{\numberline {1}{\ignorespaces 提案手法（Dual LoRA）の全体概要左：学習フェーズでは, 事前学習済みモデルとSlow LoRAを凍結し, 学習率の異なる複数のFast LoRAのみを並列に学習させる. 中央：学習終了後, 検証データを用いて最も性能の良いFast LoRAを選択し, そのパラメータを係数 $\alpha $ で重み付けしてSlow LoRAに統合する. 右：推論フェーズでは, 短期記憶をリセットし, 長期記憶を蓄積したSlow LoRAのみを用いて推論を行う.}}{2}{}\protected@file@percent }
+\newlabel{fig:1}{{1}{2}{}{figure.1}{}}
+\newlabel{method}{{2.}{2}{}{section.2}{}}
+\newlabel{experiments_setup}{{3.}{3}{}{section.3}{}}
+\newlabel{results}{{4.}{3}{}{section.4}{}}
+\@writefile{}{\contentsline {table}{\numberline {1}{\ignorespaces CIFAR-100 10-task CIL における精度比較. LoRA 単体ベースラインと提案手法の比較を示す. 旧タスクは Task 0～4（クラス 00-49）, 新タスクは Task 5～9（クラス 50-99）の平均精度である. }}{4}{}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{tab:main_results}{{1}{4}{}{table.1}{}}
+\@writefile{}{\contentsline {table}{\numberline {2}{\ignorespaces 各タスク終了時における Top-1 精度 (\%) の推移. 各列はそのタスク終了時点での全既習クラスに対する精度を示す. }}{4}{}\protected@file@percent }
+\newlabel{tab:per_task}{{2}{4}{}{table.2}{}}
+\@writefile{}{\contentsline {table}{\numberline {3}{\ignorespaces Task 9 終了後のクラスグループ別精度 (\%). 各列は対応するタスクで学習されたクラス（10クラス）の精度を示す. }}{4}{}\protected@file@percent }
+\newlabel{tab:class_group}{{3}{4}{}{table.3}{}}
+\bibstyle{IEEEbib}
+\bibdata{refs}
+\bibcite{dosovitskiy2021an}{1}
+\bibcite{wang2024comprehensive}{2}
+\bibcite{parisi2019continual}{3}
+\bibcite{rebuffi2017icarl}{4}
+\bibcite{mundt2023wholistic}{5}
+\bibcite{french1999catastrophic}{6}
+\bibcite{kirkpatrick2017overcoming}{7}
+\bibcite{mermillod2013stability}{8}
+\bibcite{houlsby2019parameter}{9}
+\bibcite{hu2022lora}{10}
+\bibcite{yu2024boosting}{11}
+\bibcite{wang2025self}{12}
+\bibcite{mcclelland1995there}{13}
+\bibcite{kumaran2016learning}{14}
+\bibcite{behrouz2025nested}{15}
+\bibcite{krizhevsky2009learning}{16}
+\bibcite{sokar2025continual}{17}
+\gdef \@abspage@last{5}

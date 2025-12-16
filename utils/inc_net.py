@@ -80,6 +80,7 @@ def get_backbone(args, pretrained=False):
                 nested_lora_rank=args.get("nested_lora_rank", 16),
                 nested_lora_use_consolidation=args.get("nested_lora_use_consolidation", False),
                 nested_lora_consolidation_alpha=args.get("nested_lora_consolidation_alpha", 0.1),
+                nested_lora_consolidation_method=args.get("nested_lora_consolidation_method", "task_arithmetic"),
                 nested_lora_eval_ablation=args.get("nested_lora_eval_ablation", "none"),
             )
             if name == "pretrained_vit_b16_224_nested_lora":
@@ -118,6 +119,7 @@ def get_backbone(args, pretrained=False):
                 nested_lora_rank=args.get("nested_lora_rank", 16),
                 nested_lora_use_consolidation=args.get("nested_lora_use_consolidation", False),
                 nested_lora_consolidation_alpha=args.get("nested_lora_consolidation_alpha", 0.1),
+                nested_lora_consolidation_method=args.get("nested_lora_consolidation_method", "task_arithmetic"),
             )
             if name == "pretrained_vit_b16_224_adapter":
                 model = vit_sema.vit_base_patch16_224_sema(num_classes=0,
@@ -147,6 +149,7 @@ def get_backbone(args, pretrained=False):
                 nested_lora_rank=args.get("nested_lora_rank", 16),
                 nested_lora_use_consolidation=args.get("nested_lora_use_consolidation", False),
                 nested_lora_consolidation_alpha=args.get("nested_lora_consolidation_alpha", 0.1),
+                nested_lora_consolidation_method=args.get("nested_lora_consolidation_method", "task_arithmetic"),
                 nested_lora_eval_ablation=args.get("nested_lora_eval_ablation", "none"),
             )
             if name == "pretrained_vit_b16_224_nested_lora":

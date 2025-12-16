@@ -1,5 +1,5 @@
 {
-    "prefix": "nested_lora_baseline",
+    "prefix": "nested_lora_baseline_fair",
     "dataset": "cifar224",
     "memory_size": 0,
     "memory_per_class": 0,
@@ -21,7 +21,7 @@
     "min_lr": 0,
     "init_lr": 0.01,
     "ffn_adapter_type": "nested_lora",
-    "nested_lora_rank": 8,
+    "nested_lora_rank": 16,
     "nested_lora_lr_fast": 0.01,
     "nested_lora_lr_slow": 0.0,
     "nested_lora_update_interval_slow": 1,
@@ -30,6 +30,6 @@
     "nested_lora_consolidation_interval": 1,
     "ffn_num": 16,
     "optimizer": "sgd",
-    "adapt_start_layer": 0,
+    "adapt_start_layer": 9,
     "adapt_end_layer": 11
 }

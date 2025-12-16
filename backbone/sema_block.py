@@ -219,22 +219,17 @@ class SEMAModules(nn.Module):
                     fast_adapters = [adapter.functional.fast]
                 
                 if hasattr(adapter.functional, "slow") and len(fast_adapters) > 0:
-                    for fast_adapter in fast_adapters:
+                    for fast_idx, fast_adapter in enumerate(fast_adapters):
+                        suppressed_elems = 0
+                        total_elems = 0
+                        fast_nonzero = 0
                         for p_s, p_f in zip(adapter.functional.slow.parameters(), fast_adapter.parameters()):
                             if method == "pam":
-                                # PAM-lite: Only merge if signs match (or one is zero? No, PAM says align. 
-                                # Here we implement "suppress conflicting updates" as per plan)
-                                # mask = 1 if p_s * p_f > 0 else 0
-                                # But wait, if p_s is 0 (init), we should probably allow update?
-                                # If p_s is 0, p_s * p_f is 0. 
-                                # If we want to populate slow initially, we should allow it.
-                                # But PAM is about alignment.
-                                # "fast のその要素を正しい方向に re-align（再初期化 or 抑制）"
-                                # If slow is 0, any direction is fine?
-                                # Let's assume if p_s is 0, we allow it.
-                                # So condition: p_s * p_f >= 0 ?
-                                # Or simply: mask = (p_s * p_f >= 0).float()
+                                # PAM-lite: suppress updates whose sign conflicts with slow
                                 mask = (p_s * p_f >= 0).float()
+                                total_elems += mask.numel()
+                                suppressed_elems += (mask.numel() - mask.sum()).item()
+                                fast_nonzero += (p_f != 0).sum().item()
                                 p_f_aligned = p_f * mask
                                 p_s.add_(alpha * p_f_aligned)
                             else:
@@ -244,5 +239,14 @@ class SEMAModules(nn.Module):
                         # Reset fast
                         for p_f in fast_adapter.parameters():
                             p_f.zero_()
+
+                        if method == "pam":
+                            allowed = total_elems - suppressed_elems
+                            blocked_ratio = (suppressed_elems / total_elems * 100) if total_elems > 0 else 0.0
+                            logging.info(
+                                f"[NestedLoRA][Layer {self.layer_id}][Adapter {adapter.adapter_id}][Fast {fast_idx}] "
+                                f"PAM-lite merge: alpha={alpha}, allowed={allowed}, suppressed={suppressed_elems} "
+                                f"({blocked_ratio:.2f}% blocked), fast_nonzero={fast_nonzero}"
+                            )
                             
         logging.info(f"Consolidated Nested LoRA at layer {self.layer_id} with alpha={alpha}, method={method}")

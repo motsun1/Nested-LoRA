@@ -94,29 +94,46 @@ class NestedLoRAAdapter(nn.Module):
         slow_out = self.slow(x)
         
         if self.training:
-            # Training: use specific fast adapter for the current task
-            if task_id is None:
-                # Fallback if task_id not provided (should not happen in correct usage)
-                # Default to 0 or raise error? Let's default to 0 for safety but log warning if needed.
-                fast_out = self.fast_adapters[0](x)
+            moe_mode = getattr(self.config, "moe_mode", "standard")
+            if moe_mode == "parallel":
+                # Parallel Training: Input x is (K*B, ...). Split and route.
+                # Assume x.shape[0] is multiple of nb_tasks
+                batch_size = x.shape[0]
+                chunk_size = batch_size // self.nb_tasks
+                
+                # Safety check
+                if batch_size % self.nb_tasks != 0:
+                    raise ValueError(f"Batch size {batch_size} must be divisible by nb_tasks {self.nb_tasks} in parallel MoE mode.")
+
+                fast_outs = []
+                for i in range(self.nb_tasks):
+                    start = i * chunk_size
+                    end = (i + 1) * chunk_size
+                    chunk = x[start:end]
+                    # Parallel routing
+                    out = self.fast_adapters[i](chunk)
+                    fast_outs.append(out)
+                fast_out = torch.cat(fast_outs, dim=0)
             else:
-                # Ensure task_id is within bounds
+                # Standard Training: use specific fast adapter for the current task
+                if task_id is None:
+                    # Fallback if task_id not provided (should not happen in correct usage)
+                    fast_out = self.fast_adapters[0](x)
+                else:
+                    # Ensure task_id is within bounds
+                    idx = task_id % self.nb_tasks
+                    # print(f"DEBUG: task_id={task_id}, idx={idx}, training={self.training}")
+                    fast_out = self.fast_adapters[idx](x)
+        else:
+            # Inference: optionally select a specific expert if task_id is given.
+            if task_id is not None:
                 idx = task_id % self.nb_tasks
                 fast_out = self.fast_adapters[idx](x)
-        else:
-            # Inference: slow + sum(fast_k) (or average)
-            # v0 design: sum all fast adapters
-            fast_out = 0
-            for adapter in self.fast_adapters:
-                fast_out = fast_out + adapter(x)
-            # Optionally average? The plan said "sum or average". 
-            # If we sum, the scale might be large. But let's stick to sum as per "ΔW = slow + Σ fast_k" roughly.
-            # Wait, if we sum K adapters, the output magnitude might be K times larger.
-            # However, usually only one fast adapter is active during training.
-            # If we sum them, we might need to scale. 
-            # But let's follow the plan: "ΔW = slow + (平均 or 和) fast_k"
-            # Let's use SUM for now, as averaging might dilute the signal if K is large and most are zero.
-            # Actually, if most are zero-initialized or small, sum is fine.
+            else:
+                # Default: sum all fast adapters (legacy behavior)
+                fast_out = 0
+                for adapter in self.fast_adapters:
+                    fast_out = fast_out + adapter(x)
             
         # Inference ablation: optionally zero one branch
         mode = getattr(self.config, "nested_lora_eval_ablation", "none")

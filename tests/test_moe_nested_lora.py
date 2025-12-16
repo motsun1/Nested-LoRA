@@ -1,162 +1,140 @@
 import torch
-import torch.nn as nn
+import unittest
 from easydict import EasyDict
-import sys
-import os
+from backbone.nested_lora_block import NestedLoRAModules, NestedLoRAAdapter
 
-# Add project root to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+class TestMoENestedLoRA(unittest.TestCase):
+    def setUp(self):
+        self.config = EasyDict({
+            "d_model": 32,
+            "attn_bn": 16, # bottleneck
+            "nested_lora_rank": 4,
+            "nb_tasks": 3,
+            "adapt_start_layer": 0,
+            "adapt_end_layer": 1,
+            "nested_lora_use_consolidation": True,
+            "nested_lora_consolidation_alpha": 1.0, # Use 1.0 for easy math
+            "nested_lora_consolidation_method": "pam",
+            "ffn_adapter_type": "nested_lora"
+        })
+        self.layer_id = 0
+        self.module = NestedLoRAModules(self.config, self.layer_id)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.module.to(self.device)
 
-from backbone.sema_components import NestedLoRAAdapter
-from backbone.nested_lora_block import NestedLoRAModules
-from backbone.vit_nested_lora import vit_base_patch16_224_nested_lora
+    def test_moe_structure(self):
+        """Verify that we have 1 slow and K fast adapters."""
+        adapter = self.module.adapter.functional
+        self.assertTrue(hasattr(adapter, "slow"))
+        self.assertTrue(hasattr(adapter, "fast_adapters"))
+        self.assertEqual(len(adapter.fast_adapters), 3)
+        print("\n[Test] MoE structure verified: 1 slow + 3 fast adapters.")
 
-def test_nested_lora_adapter_structure():
-    print("\n=== Testing NestedLoRAAdapter Structure ===")
-    config = EasyDict(
-        nested_lora_rank=4,
-        d_model=32,
-        attn_bn=16, # bottleneck
-        nb_tasks=3,
-        nested_lora_eval_ablation="none"
-    )
-    adapter = NestedLoRAAdapter(config, "test_adapter")
-    
-    print(f"Slow adapter: {adapter.slow}")
-    print(f"Fast adapters: {len(adapter.fast_adapters)}")
-    
-    assert hasattr(adapter, "slow")
-    assert hasattr(adapter, "fast_adapters")
-    assert len(adapter.fast_adapters) == 3
-    print("Structure check passed.")
-
-def test_nested_lora_forward_training():
-    print("\n=== Testing NestedLoRAAdapter Forward (Training) ===")
-    config = EasyDict(
-        nested_lora_rank=4,
-        d_model=32,
-        attn_bn=16,
-        nb_tasks=3,
-        nested_lora_eval_ablation="none"
-    )
-    adapter = NestedLoRAAdapter(config, "test_adapter")
-    adapter.train()
-    
-    x = torch.randn(2, 32)
-    
-    # Task 0
-    out0 = adapter(x, task_id=0)
-    # Task 1
-    out1 = adapter(x, task_id=1)
-    
-    # Check if different fast adapters are used
-    # We can check gradients or just output if weights are different
-    # Let's manually modify weights to be sure
-    with torch.no_grad():
-        adapter.fast_adapters[0].down_proj.weight.fill_(1.0)
-        adapter.fast_adapters[0].up_proj.weight.fill_(1.0)
-        adapter.fast_adapters[1].down_proj.weight.fill_(2.0)
-        adapter.fast_adapters[1].up_proj.weight.fill_(1.0)
-        adapter.slow.down_proj.weight.fill_(0.0) # Ignore slow for now
-        adapter.slow.up_proj.weight.fill_(0.0)
-    
-    out0 = adapter(x, task_id=0)
-    out1 = adapter(x, task_id=1)
-    
-    print(f"Output Task 0 mean: {out0.mean().item()}")
-    print(f"Output Task 1 mean: {out1.mean().item()}")
-    
-    assert not torch.allclose(out0, out1), "Outputs should be different for different tasks"
-    print("Forward training check passed.")
-
-def test_nested_lora_forward_inference():
-    print("\n=== Testing NestedLoRAAdapter Forward (Inference) ===")
-    config = EasyDict(
-        nested_lora_rank=4,
-        d_model=32,
-        attn_bn=16,
-        nb_tasks=3,
-        nested_lora_eval_ablation="none"
-    )
-    adapter = NestedLoRAAdapter(config, "test_adapter")
-    adapter.eval()
-    
-    x = torch.randn(2, 32)
-    
-    with torch.no_grad():
-        adapter.fast_adapters[0].down_proj.weight.fill_(1.0)
-        adapter.fast_adapters[0].up_proj.weight.fill_(1.0)
-        adapter.fast_adapters[1].down_proj.weight.fill_(2.0)
-        adapter.fast_adapters[1].up_proj.weight.fill_(1.0)
-        adapter.fast_adapters[2].down_proj.weight.fill_(3.0)
-        adapter.fast_adapters[2].up_proj.weight.fill_(1.0)
-        adapter.slow.down_proj.weight.fill_(0.0)
-        adapter.slow.up_proj.weight.fill_(0.0)
+    def test_forward_routing(self):
+        """Verify that task_id routes to the correct fast adapter during training."""
+        self.module.train()
+        x = torch.randn(1, 1, 32).to(self.device)
         
-    out = adapter(x) # No task_id needed for inference
-    
-    # Should be sum of all fast adapters
-    # fast0 + fast1 + fast2
-    # Since we filled weights, let's just check it runs and returns something
-    print(f"Output Inference mean: {out.mean().item()}")
-    assert out.shape == x.shape
-    print("Forward inference check passed.")
+        # Task 0
+        out0 = self.module(x, task_id=0)
+        # Check gradients: only fast_0 and slow should have grads (if we backward)
+        # Instead of backward, let's check which forward was called by mocking or checking side effects?
+        # Easier: check if output changes when we modify fast_0 but not fast_1
+        
+        with torch.no_grad():
+            self.module.adapter.functional.fast_adapters[0].down_proj.weight.fill_(1.0)
+            self.module.adapter.functional.fast_adapters[0].up_proj.weight.fill_(1.0)
+            
+            self.module.adapter.functional.fast_adapters[1].down_proj.weight.fill_(100.0)
+            self.module.adapter.functional.fast_adapters[1].up_proj.weight.fill_(1.0)
+            
+            self.module.adapter.functional.fast_adapters[0].down_proj.bias.fill_(1.0)
+            self.module.adapter.functional.fast_adapters[1].down_proj.bias.fill_(1.0)
+            
+            self.module.adapter.functional.slow.down_proj.weight.fill_(0.0)
+            self.module.adapter.functional.slow.up_proj.weight.fill_(0.0)
+            
+        out0_val = self.module(x, task_id=0)["func_out"]
+        out1_val = self.module(x, task_id=1)["func_out"]
+        
+        self.assertFalse(torch.allclose(out0_val, out1_val), "Task 0 and Task 1 outputs should differ")
+        print("[Test] Forward routing verified: Task 0 and Task 1 produce different outputs.")
 
-def test_consolidation():
-    print("\n=== Testing Consolidation ===")
-    config = EasyDict(
-        nested_lora_rank=4,
-        d_model=32,
-        attn_bn=16,
-        nb_tasks=3,
-        nested_lora_eval_ablation="none",
-        nested_lora_use_consolidation=True,
-        nested_lora_consolidation_alpha=0.5,
-        adapt_start_layer=0,
-        adapt_end_layer=1
-    )
-    
-    # Mock NestedLoRAModules
-    module = NestedLoRAModules(config, layer_id=0)
-    
-    # Initialize weights
-    with torch.no_grad():
-        module.adapter.functional.slow.down_proj.weight.fill_(1.0)
-        module.adapter.functional.slow.up_proj.weight.fill_(1.0)
-        module.adapter.functional.fast_adapters[0].down_proj.weight.fill_(2.0)
-        module.adapter.functional.fast_adapters[0].up_proj.weight.fill_(1.0)
-        module.adapter.functional.fast_adapters[1].down_proj.weight.fill_(3.0)
-        module.adapter.functional.fast_adapters[1].up_proj.weight.fill_(1.0)
-    
-    print("Before consolidation task 0:")
-    print(f"Slow: {module.adapter.functional.slow.down_proj.weight[0,0].item()}")
-    print(f"Fast 0: {module.adapter.functional.fast_adapters[0].down_proj.weight[0,0].item()}")
-    
-    # Consolidate Task 0
-    module.end_of_task_training(do_consolidate=True, task_id=0)
-    
-    print("After consolidation task 0:")
-    slow_val = module.adapter.functional.slow.down_proj.weight[0,0].item()
-    fast0_val = module.adapter.functional.fast_adapters[0].down_proj.weight[0,0].item()
-    fast1_val = module.adapter.functional.fast_adapters[1].down_proj.weight[0,0].item()
-    
-    print(f"Slow: {slow_val}")
-    print(f"Fast 0: {fast0_val}")
-    print(f"Fast 1: {fast1_val}")
-    
-    # Expected: Slow = 1.0 + 0.5 * 2.0 = 2.0
-    # Fast 0 = 0.0
-    # Fast 1 = 3.0 (unchanged)
-    
-    assert abs(slow_val - 2.0) < 1e-5
-    assert abs(fast0_val - 0.0) < 1e-5
-    assert abs(fast1_val - 3.0) < 1e-5
-    
-    print("Consolidation check passed.")
+    def test_pam_consolidation(self):
+        """Verify PAM-lite consolidation logic."""
+        # Setup weights
+        # Slow: [1, -1, 1, -1]
+        # Fast: [1, 1, -1, -1]
+        # Alpha = 1.0
+        # Expected Mask: [1, 0, 0, 1] (Signs match at idx 0 and 3)
+        # Expected Update: Slow += 1.0 * (Fast * Mask) = [1+1, -1+0, 1+0, -1-1] = [2, -1, 1, -2]
+        
+        adapter = self.module.adapter.functional
+        slow_param = list(adapter.slow.down_proj.parameters())[0] # weight
+        fast_param = list(adapter.fast_adapters[0].down_proj.parameters())[0] # weight
+        
+        # Resize for simple test
+        with torch.no_grad():
+            slow_param.data = torch.tensor([[1.0, -1.0], [1.0, -1.0]]).to(self.device)
+            fast_param.data = torch.tensor([[1.0, 1.0], [-1.0, -1.0]]).to(self.device)
+            
+            # Ensure other fast adapters are different to verify they are not touched
+            list(adapter.fast_adapters[1].down_proj.parameters())[0].data.fill_(99.0)
 
-if __name__ == "__main__":
-    test_nested_lora_adapter_structure()
-    test_nested_lora_forward_training()
-    test_nested_lora_forward_inference()
-    test_consolidation()
-    print("\nAll tests passed!")
+        # Consolidate Task 0
+        self.module.end_of_task_training(task_id=0)
+        
+        # Check Slow
+        expected_slow = torch.tensor([[2.0, -1.0], [1.0, -2.0]]).to(self.device)
+        self.assertTrue(torch.allclose(slow_param.data, expected_slow), f"Slow weights mismatch.\nExpected:\n{expected_slow}\nActual:\n{slow_param.data}")
+        
+        # Check Fast 0 (should be reset)
+        self.assertTrue(torch.allclose(fast_param.data, torch.zeros_like(fast_param.data)), "Fast 0 should be reset to zero.")
+        
+        # Check Fast 1 (should be untouched)
+        fast1_param = list(adapter.fast_adapters[1].down_proj.parameters())[0]
+        self.assertTrue(torch.allclose(fast1_param.data, torch.tensor(99.0).to(self.device)), "Fast 1 should be untouched.")
+        
+        print("[Test] PAM-lite consolidation verified.")
+
+    def test_parallel_forward(self):
+        """Verify parallel forward pass (batch splitting)."""
+        self.config.moe_mode = "parallel"
+        self.module.train()
+        
+        # Batch size = K * 2 (2 samples per expert)
+        K = 3
+        B = 2
+        x = torch.randn(K * B, 1, 32).to(self.device)
+        
+        # Set distinct weights for each expert to verify routing
+        with torch.no_grad():
+            for i in range(K):
+                self.module.adapter.functional.fast_adapters[i].down_proj.weight.fill_(float(i + 1))
+                self.module.adapter.functional.fast_adapters[i].up_proj.weight.fill_(1.0)
+                self.module.adapter.functional.fast_adapters[i].down_proj.bias.fill_(1.0)
+            self.module.adapter.functional.slow.down_proj.weight.fill_(0.0)
+            self.module.adapter.functional.slow.up_proj.weight.fill_(0.0)
+
+        out = self.module(x)["func_out"]
+        
+        # Check output chunks
+        # Chunk 0 (indices 0, 1) should be affected by fast_0 (weight 1.0)
+        # Chunk 1 (indices 2, 3) should be affected by fast_1 (weight 2.0)
+        # Chunk 2 (indices 4, 5) should be affected by fast_2 (weight 3.0)
+        
+        chunk0 = out[0:2]
+        chunk1 = out[2:4]
+        chunk2 = out[4:6]
+        
+        self.assertNotAlmostEqual(chunk0.mean().item(), chunk1.mean().item())
+        self.assertNotAlmostEqual(chunk1.mean().item(), chunk2.mean().item())
+        
+        # Verify values roughly (x * 1 vs x * 2 vs x * 3)
+        # Since x is random, means might vary, but let's check ratio if x was constant?
+        # Or just check that they are different is enough for routing verification.
+        
+        print("[Test] Parallel forward routing verified.")
+
+if __name__ == '__main__':
+    unittest.main()

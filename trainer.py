@@ -119,6 +119,34 @@ def _train(args):
             print('Average Accuracy (CNN):', sum(cnn_curve["top1"])/len(cnn_curve["top1"]))
             logging.info("Average Accuracy (CNN): {} \n".format(sum(cnn_curve["top1"])/len(cnn_curve["top1"])))
 
+    # Output Expert Selection History for MFL (Multiple Fast LoRA)
+    if hasattr(model, 'selection_history') and model.selection_history:
+        logging.info("=" * 60)
+        logging.info("[MFL] Expert Selection Summary")
+        logging.info("=" * 60)
+        logging.info(f"[MFL] Selection History (Expert -> Count): {model.selection_history}")
+        
+        if hasattr(model, 'selection_records') and model.selection_records:
+            logging.info("[MFL] Per-Task Selection Records:")
+            for record in model.selection_records:
+                task = record['task']
+                selected = record['selected']
+                selected_acc = record['selected_acc']
+                expert_accs = record['expert_accs']
+                logging.info(f"  Task {task}: Selected Expert {selected} (Acc: {selected_acc:.2f}%)")
+                logging.info(f"    All Expert Accs: {[(k, f'{v:.2f}%') for k, v in expert_accs]}")
+        
+        # Summary statistics for histogram
+        total_selections = sum(model.selection_history.values())
+        logging.info(f"[MFL] Total Selections: {total_selections}")
+        logging.info("[MFL] Selection Frequency:")
+        for expert_idx in sorted(model.selection_history.keys()):
+            count = model.selection_history[expert_idx]
+            freq = count / total_selections * 100 if total_selections > 0 else 0
+            bar = '#' * int(freq / 5)  # Simple text histogram
+            logging.info(f"  Expert {expert_idx}: {count:3d} ({freq:5.1f}%) {bar}")
+        logging.info("=" * 60)
+
 
 def _set_device(args):
     device_type = args["device"]

@@ -71,6 +71,8 @@ class NestedLoRAModules(nn.Module):
             self.consolidate_nested_lora(alpha, task_id=task_id)
             
     def consolidate_nested_lora(self, alpha: float, task_id=None):
+        method = getattr(self.config, "nested_lora_consolidation_method", "task_arithmetic")
+        
         with torch.no_grad():
             adapter = self.adapter
             
@@ -86,17 +88,65 @@ class NestedLoRAModules(nn.Module):
                     fast_adapter = adapter.functional.fast_adapters[idx]
                 
                 # slow += alpha * fast
+                suppressed_elems = 0
+                total_elems = 0
+                fast_nonzero = 0
                 for p_s, p_f in zip(adapter.functional.slow.parameters(), fast_adapter.parameters()):
-                    p_s.add_(alpha * p_f)
+                    if method == "pam":
+                        # PAM-lite: Only merge if signs match (or one is zero)
+                        # mask = 1 if p_s * p_f >= 0 else 0
+                        mask = (p_s * p_f >= 0).float()
+                        total_elems += mask.numel()
+                        suppressed_elems += (mask.numel() - mask.sum()).item()
+                        fast_nonzero += (p_f != 0).sum().item()
+                        p_f_aligned = p_f * mask
+                        p_s.add_(alpha * p_f_aligned)
+                    else:
+                        # Default Task Arithmetic
+                        p_s.add_(alpha * p_f)
+
                 # fast = 0
                 for p_f in fast_adapter.parameters():
                     p_f.zero_()
-                    
-                logging.info(f"Consolidated Nested LoRA at layer {self.layer_id} (fast_{idx} -> slow) with alpha={alpha}")
+
+                if method == "pam":
+                    allowed = total_elems - suppressed_elems
+                    blocked_ratio = (suppressed_elems / total_elems * 100) if total_elems > 0 else 0.0
+                    logging.info(
+                        f"[NestedLoRA][Layer {self.layer_id}][Fast {idx}] PAM-lite merge: alpha={alpha}, allowed={allowed}, "
+                        f"suppressed={suppressed_elems} ({blocked_ratio:.2f}% blocked), fast_nonzero={fast_nonzero}"
+                    )
+                else:
+                    logging.info(
+                        f"[NestedLoRA][Layer {self.layer_id}] Consolidated fast_{idx} -> slow with alpha={alpha}, method={method}"
+                    )
             elif hasattr(adapter.functional, "slow") and hasattr(adapter.functional, "fast"):
                  # Legacy support for single fast adapter
+                suppressed_elems = 0
+                total_elems = 0
+                fast_nonzero = 0
                 for p_s, p_f in zip(adapter.functional.slow.parameters(), adapter.functional.fast.parameters()):
-                    p_s.add_(alpha * p_f)
+                    if method == "pam":
+                        mask = (p_s * p_f >= 0).float()
+                        total_elems += mask.numel()
+                        suppressed_elems += (mask.numel() - mask.sum()).item()
+                        fast_nonzero += (p_f != 0).sum().item()
+                        p_f_aligned = p_f * mask
+                        p_s.add_(alpha * p_f_aligned)
+                    else:
+                        p_s.add_(alpha * p_f)
+                        
                 for p_f in adapter.functional.fast.parameters():
                     p_f.zero_()
-                logging.info(f"Consolidated Nested LoRA at layer {self.layer_id} (single fast -> slow) with alpha={alpha}")
+
+                if method == "pam":
+                    allowed = total_elems - suppressed_elems
+                    blocked_ratio = (suppressed_elems / total_elems * 100) if total_elems > 0 else 0.0
+                    logging.info(
+                        f"[NestedLoRA][Layer {self.layer_id}] PAM-lite merge (single fast): alpha={alpha}, allowed={allowed}, "
+                        f"suppressed={suppressed_elems} ({blocked_ratio:.2f}% blocked), fast_nonzero={fast_nonzero}"
+                    )
+                else:
+                    logging.info(
+                        f"[NestedLoRA][Layer {self.layer_id}] Consolidated single fast -> slow with alpha={alpha}, method={method}"
+                    )
